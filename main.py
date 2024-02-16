@@ -108,6 +108,39 @@ def get_joke_from_website():
     else:
         return response, None
 
+def get_joke_from_laffgaff():
+  url = 'https://laffgaff.com/funny-joke-of-the-day/'
+  response = requests.get(url)
+
+  if response.status_code == 200:
+      soup = BeautifulSoup(response.text, 'html.parser')
+      joke_div = soup.find('div', class_='entry-summary', itemprop='text')
+
+      if joke_div:
+          joke = joke_div.get_text().strip()
+          return joke
+      else:
+          return None
+  else:
+      return None
+
+def get_joke_from_jokesoftheday():
+  url = 'https://jokesoftheday.net/'
+  response = requests.get(url)
+
+  if response.status_code == 200:
+      soup = BeautifulSoup(response.text, 'html.parser')
+      joke_div = soup.find('div', class_='jokeContent')
+
+      if joke_div:
+          joke_paragraphs = joke_div.find_all('p')
+          joke = ' '.join([p.get_text().strip() for p in joke_paragraphs])
+          return joke
+      else:
+          return None
+  else:
+      return None
+
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
