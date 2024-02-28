@@ -4,20 +4,7 @@ from discord.ext import commands, tasks
 from bs4 import BeautifulSoup
 import requests
 import random
-import neverSleep
-import time
-
-server_settings = {}
-
-my_secret = os.environ['DISCORD_TOKEN']
-
-neverSleep.awake('https://replit.com/@JustusThatcher/My-first-discord-bot')
-
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
+import datetime
 
 jokes_list = [
     "Why don't scientists trust atoms? Because they make up everything.",
@@ -78,68 +65,52 @@ jokes_list = [
     "What do you call a snowman with a six-pack? An abdominal snowman.",
 ]
 
-timestamp_file_path = "last_joke_timestamp.txt"
+server_settings = {}
 
-def get_last_joke_timestamp():
-    try:
-        with open(timestamp_file_path, "r") as file:
-            timestamp = float(file.read())
-        return timestamp
-    except FileNotFoundError:
-        return 0  # Return 0 if the file is not found or an error occurs
+my_secret = os.environ['DISCORD_TOKEN']
 
-def set_last_joke_timestamp(timestamp):
-    with open(timestamp_file_path, "w") as file:
-        file.write(str(timestamp))
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_reactions = True
 
-def get_joke_from_website():
-    url = 'https://www.ajokeaday.com/'
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+def get_joke_from_website(url, selector):
     response = requests.get(url)
 
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, 'html.parser')
-        joke_div = soup.find('div', {'class': 'jd-body jubilat'})
+        joke_div = soup.find(**selector)
 
         if joke_div:
             joke = joke_div.get_text().strip()
-            return response, joke
+            return joke
         else:
-            return response, None
+            return None
     else:
-        return response, None
+        return None
 
-def get_joke_from_laffgaff():
-  url = 'https://laffgaff.com/funny-joke-of-the-day/'
-  response = requests.get(url)
+def get_joke_from_sources():
+    sources = [
+        {
+            'url': 'https://www.ajokeaday.com/',
+            'selector': {'div': {'class': 'jd-body jubilat'}}
+        },
+        {
+            'url': 'https://laffgaff.com/funny-joke-of-the-day/',
+            'selector': {'div': {'class': 'entry-summary', 'itemprop': 'text'}}
+        },
+        {
+            'url': 'https://jokesoftheday.net/',
+            'selector': {'div': {'class': 'jokeContent'}}
+        }
+    ]
 
-  if response.status_code == 200:
-      soup = BeautifulSoup(response.text, 'html.parser')
-      joke_div = soup.find('div', class_='entry-summary', itemprop='text')
-
-      if joke_div:
-          joke = joke_div.get_text().strip()
-          return joke
-      else:
-          return None
-  else:
-      return None
-
-def get_joke_from_jokesoftheday():
-  url = 'https://jokesoftheday.net/'
-  response = requests.get(url)
-
-  if response.status_code == 200:
-      soup = BeautifulSoup(response.text, 'html.parser')
-      joke_div = soup.find('div', class_='jokeContent')
-
-      if joke_div:
-          joke_paragraphs = joke_div.find_all('p')
-          joke = ' '.join([p.get_text().strip() for p in joke_paragraphs])
-          return joke
-      else:
-          return None
-  else:
-      return None
+    for source in sources:
+        joke = get_joke_from_website(source['url'], source['selector'])
+        if joke:
+            return joke
+    return None
 
 @bot.event
 async def on_ready():
@@ -148,37 +119,36 @@ async def on_ready():
 
 @tasks.loop(hours=24)
 async def daily_joke():
-    response, joke = get_joke_from_website()
+    now = datetime.datetime.now()
+    if now.hour == 12 and now.minute == 0:  # Run only at noon
+        joke = get_joke_from_sources()
 
-    if joke:
-        set_last_joke_timestamp(time.time())  # Update the timestamp
+        if joke:
+            for server_id, settings in server_settings.items():
+                channel_id = settings.get("channel_id")
+                if channel_id:
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        message = await channel.send(f"Here's your daily joke: {joke}")
+                        print(f"Daily joke fetched for server {server_id}.")
+                    else:
+                        print(f"Channel not found for server {server_id}. Make sure the bot has the necessary permissions.")
+        else:
+            print("Failed to fetch daily joke from all sources.")
 
-        for server_id, settings in server_settings.items():
-            channel_id = settings.get("channel_id")
-            if channel_id:
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    await channel.send(f"Here's your daily joke: {joke}")
-                    print(f"Daily joke fetched for server {server_id}. Timestamp updated.")
-                else:
-                    print(f"Channel not found for server {server_id}. Make sure the bot has the necessary permissions.")
-    else:
-        print(f"Failed to fetch daily joke. Status Code: {response.status_code}")
-
-@bot.command(name='joke')
-async def joke_command(ctx):
-    response, joke = get_joke_from_website()
-
-    if joke:
-        await ctx.send(f"Sure, here's the daily: {joke}")
-    else:
-        await ctx.send(f"Sorry, I couldn't fetch a joke right now. Status Code: {response.status_code}")
-        print(response.text)
-
-@bot.command(name='jokes')
-async def jokes_command(ctx):
-    random_joke = random.choice(jokes_list)
-    await ctx.send(f"{random_joke}")
+@bot.event
+async def on_reaction_add(reaction, user):
+    if reaction.emoji == '👎' and not user.bot:  # Check for thumbs down reaction
+        message = reaction.message
+        count = sum(1 for reaction in message.reactions if reaction.emoji == '👎')
+        if count >= 3:  # Threshold for downvotes
+            joke = get_joke_from_sources()  # Fetch the next joke
+            if joke:
+                await message.channel.send(f"The daily joke was unpopular. Here's another one: {joke}")
+                await message.delete()  # Delete the unpopular joke
+            else:
+                await message.channel.send("No more jokes available for today.")
+                await message.clear_reaction('👎')  # Clear reactions if no more jokes available
 
 @bot.command(name='setup')
 async def setup_command(ctx):
@@ -197,5 +167,16 @@ async def setup_command(ctx):
     except asyncio.TimeoutError:
         await ctx.send("Setup timed out. Run the setup command again if you wish to configure the bot.")
 
+@bot.command(name='joke')
+async def joke_command(ctx):
+    joke = get_joke_from_sources()
+    if joke:
+        await ctx.send(f"Sure, here's the daily joke: {joke}")
+    else:
+        await ctx.send("Sorry, I couldn't fetch a joke right now.")
+
+@bot.command(name='jokes')
+async def jokes_command(ctx):
+    await ctx.send(random.choice(jokes_list))
 
 bot.run(my_secret)
